@@ -1,8 +1,12 @@
+{-# language LambdaCase #-}
+
 -- | Issue insecure HTTP requests using the 'Socket' type from the @network@
 -- library.
 module Http.Exchange.Network
   ( -- * Issue Requests
     exchange
+  , exchangeInterruptible
+  , exchangeTimeout
     -- * Example Use
     -- $example
     -- * Exceptions
@@ -13,8 +17,12 @@ module Http.Exchange.Network
 
 import Network.Socket (Socket)
 import Http.Types (Request,Bodied,Response)
-
 import SocketExchange (Exception(..),HttpException(..))
+import Control.Concurrent.STM (TVar,registerDelay)
+import Data.Bifunctor (first)
+
+import qualified SocketInterruptibleChannel as YChan
+import qualified SocketInterruptibleExchange as Y
 import qualified SocketExchange as X
 
 -- | Issue an HTTP request and await a response. This is does not use TLS
@@ -25,6 +33,40 @@ exchange ::
   -> Bodied Request -- ^ HTTP Request
   -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
 exchange = X.exchange
+
+-- | Variant of exchange that abandons the attempt if the interrupt
+-- variable is set to @True@. If the operation is interrupted in this
+-- way, the result is @EAGAIN@ wrapped by either @Send@ or @Receive@.
+-- See the implementation of 'exchangeTimeout' for an example of how to
+-- use this function to timeout if the HTTP exchange does not complete
+-- quickly.
+exchangeInterruptible :: 
+     TVar Bool -- ^ Interrupt
+  -> Socket -- ^ Network socket (TCP or Unix-Domain)
+  -> Bodied Request -- ^ HTTP Request
+  -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
+exchangeInterruptible !a b c =
+  (fmap (first convertException) (Y.exchange (YChan.Resource b a) c))
+
+-- | Variant of 'exchange' that abandons the exchange if it has not
+-- completed in a given number of microseconds.
+exchangeTimeout :: 
+     Int -- ^ Microseconds to wait before giving up
+  -> Socket -- ^ Network socket (TCP or Unix-Domain)
+  -> Bodied Request -- ^ HTTP Request
+  -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
+exchangeTimeout !t sock req = do
+  interrupt <- registerDelay t
+  exchangeInterruptible interrupt sock req
+
+-- It would be better to fix this problem by changing the structure
+-- of http-exchange. The exceptions types are nominally different,
+-- but they are isomorphic.
+convertException :: Y.Exception -> X.Exception
+convertException = \case
+  Y.Http x -> X.Http x
+  Y.Send x -> X.Send x
+  Y.Receive x -> X.Receive x
 
 {- $example
 
