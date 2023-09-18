@@ -1,9 +1,16 @@
+{-# language LambdaCase #-}
+
 -- | Issue HTTPS requests using the 'Context' type from the @tls@
 -- library.
 module Http.Exchange.Tls
   ( -- * Issue Requests
     exchange
+    -- * Issue Interruptible Requests 
+  , exchangeInterruptible
+  , exchangeTimeout
+  , interruptibleContextNew
     -- * Types
+  , InterruptibleContext
   , SocketThrowingNetworkException(..)
   , NetworkException(..)
   , TransportException(..)
@@ -18,10 +25,23 @@ module Http.Exchange.Tls
 import Network.TLS (Context)
 import Http.Types (Request,Bodied,Response)
 
-import TlsChannel (SocketThrowingNetworkException(..),NetworkException(..))
+import TlsChannel (NetworkException(..))
 import TlsChannel (TransportException(..))
+import Control.Exception (IOException,try,throwIO)
 import TlsExchange (Exception(..),HttpException(..))
+import Network.Socket (Socket)
+import Foreign.C.Error (Errno)
+import Foreign.C.Error (Errno)
+import Data.IORef (IORef,readIORef,writeIORef,newIORef)
+import Control.Concurrent.STM (TVar,registerDelay)
+import Data.ByteString (ByteString)
 import qualified TlsExchange as X
+import qualified Data.List as List
+import qualified Data.ByteString as ByteString
+import qualified Network.Socket as N
+import qualified Network.Unexceptional.ByteString as NBS
+import qualified Network.TLS as Tls
+import qualified Network.Unexceptional.Chunks as NC
 
 -- | Issue an HTTP request and await a response. This is does not use TLS
 -- (i.e. HTTP, not HTTPS). This function returns exceptions in @Left@ rather
@@ -31,6 +51,43 @@ exchange ::
   -> Bodied Request -- ^ HTTP Request
   -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
 exchange = X.exchange
+
+-- | Variant of exchange that abandons the attempt if the interrupt
+-- variable is set to @True@. The design of the @tls@ library complicates
+-- this function's signature and use. There is an 'InterruptibleContext'
+-- type defined in this module that must be used with this function.
+-- It is not possible to use the ordinary @Context@ type from @tls@.
+-- Example use:
+--
+-- > clientParams   <- ... -- elided for brevity
+-- > theAddressInfo <- ... -- elided for brevity
+-- > sock <- ...           -- elided for brevity
+-- > N.connect sock theAddressInfo
+-- > ctx <- interruptibleContextNew sock clientParams
+-- > Tls.handshake ctx
+-- > interrupt <- registerDelay 1_000_000
+-- > result <- exchange interrupt ctx Bodied{..} -- request body elided
+exchangeInterruptible ::
+     TVar Bool -- ^ Interrupt
+  -> InterruptibleContext -- ^ TLS Context supporting interruption
+  -> Bodied Request -- ^ HTTP Request
+  -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
+exchangeInterruptible !intr (InterruptibleContext ctx intrRef) !req = do
+  writeIORef intrRef intr
+  r <- X.exchange ctx req
+  writeIORef intrRef interruptibleContextError
+  pure r
+
+-- | Variant of 'exchange' that abandons the exchange if it has not
+-- completed in a given number of microseconds.
+exchangeTimeout :: 
+     Int -- ^ Microseconds to wait before giving up
+  -> InterruptibleContext -- ^ TLS Context supporting interruption
+  -> Bodied Request -- ^ HTTP Request
+  -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
+exchangeTimeout !t ctx req = do
+  interrupt <- registerDelay t
+  exchangeInterruptible interrupt ctx req
 
 {- $example
 
@@ -134,3 +191,65 @@ module, but in this instantiation, these types are both aliases
 for 'Foreign.C.Error.Errno'.
 -}
 
+-- | Wraps the Socket type. This has different HasBackend instance that
+-- throws NetworkException instead of IOException.
+-- Elsewhere, when we call Tls.contextNew to create a TLS context,
+-- we must use this type instead of Socket.
+newtype SocketThrowingNetworkException
+  = SocketThrowingNetworkException Socket
+
+data InterruptibleContext
+  = InterruptibleContext !Tls.Context !(IORef (TVar Bool))
+
+interruptibleContextError :: TVar Bool
+{-# noinline interruptibleContextError #-}
+interruptibleContextError =
+  errorWithoutStackTrace "Http.Exchange.Tls: misuse of InterruptibleContext"
+
+-- | Create a new TLS context that supports interrupting exchanges
+-- with a 'TVar'.
+interruptibleContextNew :: (Tls.TLSParams params)
+  => Socket -- ^ Network socket. Must already be connected.
+  -> params -- ^ Parameters of the context.
+  -> IO InterruptibleContext
+interruptibleContextNew socket params = do
+  !intrRef <- newIORef interruptibleContextError
+  let backend = buildInterruptibleBackend socket intrRef
+  context <- Tls.contextNew backend params
+  pure (InterruptibleContext context intrRef)
+
+buildInterruptibleBackend :: Socket -> IORef (TVar Bool) -> Tls.Backend
+buildInterruptibleBackend s !intrRef = Tls.Backend
+  { Tls.backendFlush = pure ()
+  , Tls.backendClose = N.close s
+  , Tls.backendSend = \b -> do
+      !interrupt <- readIORef intrRef
+      NBS.sendInterruptible interrupt s b >>= \case
+        Left e -> throwIO (NetworkException e)
+        Right () -> pure ()
+  , Tls.backendRecv = \n -> do
+      !interrupt <- readIORef intrRef
+      NBS.receiveExactlyInterruptible interrupt s n >>= \case
+        Left e -> throwIO (NetworkException e)
+        Right bs -> pure bs
+  }
+instance Tls.HasBackend SocketThrowingNetworkException where
+  initializeBackend _ = pure ()
+  getBackend (SocketThrowingNetworkException s) =
+    buildBackendThrowingNetworkException s
+
+buildBackendThrowingNetworkException :: Socket -> Tls.Backend
+buildBackendThrowingNetworkException !s = Tls.Backend
+  { Tls.backendFlush = pure ()
+  , Tls.backendClose = N.close s
+  , Tls.backendSend = \b -> NBS.send s b >>= \case
+      Left e -> throwIO (NetworkException e)
+      Right () -> pure ()
+  -- Note: This receive function does not imitate the behavior of the
+  -- auxiliary function recvAll defined in Network.TLS.Backend. If the
+  -- peer performs an orderly shutdown without sending enough bytes,
+  -- this throws EEOI.
+  , Tls.backendRecv = \n -> NBS.receiveExactly s n >>= \case
+      Left e -> throwIO (NetworkException e)
+      Right bs -> pure bs
+  }

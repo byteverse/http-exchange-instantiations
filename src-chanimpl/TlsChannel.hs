@@ -10,7 +10,6 @@ module TlsChannel
   , showsPrecSendException
   , showsPrecReceiveException
   , Resource
-  , SocketThrowingNetworkException(..)
   , NetworkException(..)
   , send
   , receive
@@ -66,43 +65,6 @@ data NetworkException = NetworkException !Errno
 
 instance Show NetworkException where
   show (NetworkException e) = Describe.string e
-
--- | Wraps the Socket type. This has different HasBackend instance that
--- throws NetworkException instead of IOException.
--- Elsewhere, when we call Tls.contextNew to create a TLS context,
--- we must use this type instead of Socket.
-newtype SocketThrowingNetworkException
-  = SocketThrowingNetworkException Socket
-
-instance Tls.HasBackend SocketThrowingNetworkException where
-  initializeBackend _ = pure ()
-  getBackend (SocketThrowingNetworkException s) =
-    buildBackendThrowingNetworkException s
-
-buildBackendThrowingNetworkException :: Socket -> Tls.Backend
-buildBackendThrowingNetworkException !s = Tls.Backend
-  { Tls.backendFlush = pure ()
-  , Tls.backendClose = N.close s
-  , Tls.backendSend = \b -> NBS.send s b >>= \case
-      Left e -> throwIO (NetworkException e)
-      Right () -> pure ()
-  , Tls.backendRecv = \n -> receiveExactly s n >>= \case
-      Left e -> throwIO (NetworkException e)
-      Right bs -> pure bs
-  }
-
--- Note: this imitates the behavior of the auxiliary function recvAll
--- defined in Network.TLS.Backend. If the peer performs an orderly
--- shutdown without sending enough bytes, this function returns
--- successfully with a number of bytes that is less than expected.
-receiveExactly :: Socket -> Int -> IO (Either Errno ByteString)
-receiveExactly !s !n0 = go [] n0 where
-  go !acc 0 = pure (Right (ByteString.concat (List.reverse acc)))
-  go !acc n = NBS.receive s n >>= \case
-    Left err -> pure (Left err)
-    Right b -> case ByteString.length b of
-      0 -> pure (Right (ByteString.concat (List.reverse acc)))
-      m -> go (b : acc) (n - m)
 
 -- | There are three types of exceptions that we can get when
 -- sending/receiving data, so we nest the call to sendData in three

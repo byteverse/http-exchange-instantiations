@@ -1,6 +1,6 @@
 cabal-version: 3.0
 name: http-exchange-instantiations
-version: 0.1.1.0
+version: 0.1.2.0
 synopsis: Instantiations of http-exchange
 -- description:
 license: BSD-3-Clause
@@ -18,9 +18,10 @@ library chanimpl
     SocketChannel
     SocketInterruptibleChannel
     TlsChannel
+    -- TlsInterruptibleChannel
   build-depends:
     , base >=4.16.3.0 && <5
-    , network-unexceptional >=0.1.3
+    , network-unexceptional >=0.2
     , network >=3.1.4
     , tls >=1.8
     , error-codes >=0.1.1
@@ -43,6 +44,8 @@ library
     , network >=3.1.4
     , stm >=2.5.1.0
     , tls >=1.7
+    , network-unexceptional >=0.2
+    , bytestring >=0.11
   hs-source-dirs: src
   default-language: GHC2021
   mixins:
