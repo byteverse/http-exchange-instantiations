@@ -1,6 +1,6 @@
 cabal-version: 3.0
 name: http-exchange-instantiations
-version: 0.1.2.0
+version: 0.1.2.1
 synopsis: Instantiations of http-exchange
 -- description:
 license: BSD-3-Clause

@@ -9,6 +9,7 @@ module Http.Exchange.Tls
   , exchangeInterruptible
   , exchangeTimeout
   , interruptibleContextNew
+  , exposeInterruptibleContext
     -- * Types
   , InterruptibleContext
   , SocketThrowingNetworkException(..)
@@ -217,6 +218,13 @@ interruptibleContextNew socket params = do
   let backend = buildInterruptibleBackend socket intrRef
   context <- Tls.contextNew backend params
   pure (InterruptibleContext context intrRef)
+
+-- | Expose the TLS context. Do not call TLS data-exchange functions like
+-- @sendData@ or @recvData@ on this context. This context is exposed so
+-- that the caller can query it for metadata about the session (certs, etc.).
+exposeInterruptibleContext :: InterruptibleContext -> Tls.Context
+{-# inline exposeInterruptibleContext #-}
+exposeInterruptibleContext (InterruptibleContext c _) = c
 
 buildInterruptibleBackend :: Socket -> IORef (TVar Bool) -> Tls.Backend
 buildInterruptibleBackend s !intrRef = Tls.Backend
