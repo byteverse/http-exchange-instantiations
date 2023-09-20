@@ -9,6 +9,7 @@ module Http.Exchange.Tls
   , exchangeInterruptible
   , exchangeTimeout
   , interruptibleContextNew
+  , interruptibleHandshake
   , exposeInterruptibleContext
     -- * Types
   , InterruptibleContext
@@ -26,7 +27,7 @@ module Http.Exchange.Tls
 import Network.TLS (Context)
 import Http.Types (Request,Bodied,Response)
 
-import TlsChannel (NetworkException(..))
+import TlsChannel (NetworkException(..),tryTls)
 import TlsChannel (TransportException(..))
 import Control.Exception (IOException,try,throwIO)
 import TlsExchange (Exception(..),HttpException(..))
@@ -78,6 +79,20 @@ exchangeInterruptible !intr (InterruptibleContext ctx intrRef) !req = do
   r <- X.exchange ctx req
   writeIORef intrRef interruptibleContextError
   pure r
+
+-- | TLS handshake that can be interrupted. Unlike the original handshake
+-- from the @tls@ library, this returns exceptions rather than throwing them.
+-- This function must be called before performing any HTTP exchanges on
+-- the interruptible context.
+interruptibleHandshake ::
+     TVar Bool -- ^ Interrupt
+  -> InterruptibleContext -- ^ TLS Context supporting interruption
+  -> IO (Either TransportException ())
+interruptibleHandshake !intr (InterruptibleContext ctx intrRef) = do
+  writeIORef intrRef intr
+  x <- tryTls (Tls.handshake ctx)
+  writeIORef intrRef interruptibleContextError
+  pure x
 
 -- | Variant of 'exchange' that abandons the exchange if it has not
 -- completed in a given number of microseconds.
@@ -220,8 +235,9 @@ interruptibleContextNew socket params = do
   pure (InterruptibleContext context intrRef)
 
 -- | Expose the TLS context. Do not call TLS data-exchange functions like
--- @sendData@ or @recvData@ on this context. This context is exposed so
--- that the caller can query it for metadata about the session (certs, etc.).
+-- @sendData@, @recvData@, or @handshake@ on this context. This context is
+-- exposed so that the caller can query it for metadata about the session
+-- (certs, etc.).
 exposeInterruptibleContext :: InterruptibleContext -> Tls.Context
 {-# inline exposeInterruptibleContext #-}
 exposeInterruptibleContext (InterruptibleContext c _) = c

@@ -1,5 +1,9 @@
 # Revision history for http-exchange-instantiations
 
+## 0.1.3.0 -- 2023-09-21
+
+* Add missing `interruptibleHandshake`.
+
 ## 0.1.2.1 -- 2023-09-21
 
 * Add missing `exposeInterruptibleContext`.
