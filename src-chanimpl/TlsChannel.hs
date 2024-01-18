@@ -1,37 +1,31 @@
-{-# language DerivingStrategies #-}
-{-# language LambdaCase #-}
-{-# language DeriveAnyClass #-}
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE LambdaCase #-}
 
 module TlsChannel
   ( M
-  , TransportException(..)
+  , TransportException (..)
   , SendException
   , ReceiveException
   , showsPrecSendException
   , showsPrecReceiveException
   , Resource
-  , NetworkException(..)
+  , NetworkException (..)
   , send
   , receive
   , tryTls
   ) where
 
+import Control.Exception (Exception, IOException, try)
 import Data.Bytes (Bytes)
-import Data.ByteString (ByteString)
 import Data.Bytes.Chunks (Chunks)
-import Control.Exception (Exception,IOException,try,throwIO)
-import Network.Socket (Socket)
 import Foreign.C.Error (Errno)
 
-import qualified Data.Bytes as Bytes
-import qualified Data.List as List
-import qualified Data.Bytes.Chunks as Chunks
-import qualified Network.Socket as N
-import qualified Network.Unexceptional.ByteString as NBS
-import qualified Network.TLS as Tls
-import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString as ByteString
-import qualified Foreign.C.Error.Describe as Describe
+import Data.ByteString.Lazy qualified as LBS
+import Data.Bytes qualified as Bytes
+import Data.Bytes.Chunks qualified as Chunks
+import Foreign.C.Error.Describe qualified as Describe
+import Network.TLS qualified as Tls
 
 type M = IO
 
@@ -53,12 +47,18 @@ showsPrecReceiveException :: Int -> ReceiveException -> String -> String
 showsPrecReceiveException = showsPrec
 
 instance Show TransportException where
-  showsPrec d (Network e) = showParen (d > 10)
-    (showString "Network " . showsPrecErrno 11 e)
-  showsPrec d (System e) = showParen (d > 10)
-    (showString "System " . showsPrec 11 e)
-  showsPrec d (TlsException e) = showParen (d > 10)
-    (showString "TlsException " . showsPrec 11 e)
+  showsPrec d (Network e) =
+    showParen
+      (d > 10)
+      (showString "Network " . showsPrecErrno 11 e)
+  showsPrec d (System e) =
+    showParen
+      (d > 10)
+      (showString "System " . showsPrec 11 e)
+  showsPrec d (TlsException e) =
+    showParen
+      (d > 10)
+      (showString "TlsException " . showsPrec 11 e)
 
 data NetworkException = NetworkException !Errno
   deriving anyclass (Exception)
@@ -66,22 +66,24 @@ data NetworkException = NetworkException !Errno
 instance Show NetworkException where
   show (NetworkException e) = Describe.string e
 
--- | There are three types of exceptions that we can get when
--- sending/receiving data, so we nest the call to sendData in three
--- try statements to catch all the possible exceptions.   
+{- | There are three types of exceptions that we can get when
+sending/receiving data, so we nest the call to sendData in three
+try statements to catch all the possible exceptions.
+-}
 send ::
-     Tls.Context
-  -> Chunks
-  -> IO (Either TransportException ())
+  Tls.Context ->
+  Chunks ->
+  IO (Either TransportException ())
 send ctx ch =
   tryTls $ Tls.sendData ctx (LBS.fromStrict (Chunks.concatByteString ch))
 
 receive ::
-     Tls.Context
-  -> M (Either TransportException Bytes)
-receive a = tryTls (Tls.recvData a) >>= \case
-  Left err -> pure (Left err)
-  Right b -> pure $! Right $! Bytes.fromByteString b
+  Tls.Context ->
+  M (Either TransportException Bytes)
+receive a =
+  tryTls (Tls.recvData a) >>= \case
+    Left err -> pure (Left err)
+    Right b -> pure $! Right $! Bytes.fromByteString b
 
 tryTls :: IO a -> IO (Either TransportException a)
 tryTls action = do
