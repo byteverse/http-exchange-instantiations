@@ -1,60 +1,75 @@
-{-# language LambdaCase #-}
+{-# LANGUAGE LambdaCase #-}
 
--- | Issue insecure HTTP requests using the 'Socket' type from the @network@
--- library.
+{- | Issue insecure HTTP requests using the 'Socket' type from the @network@
+library.
+-}
 module Http.Exchange.Network
   ( -- * Issue Requests
     exchange
   , exchangeInterruptible
   , exchangeTimeout
+
     -- * Example Use
     -- $example
-    -- * Exceptions
     -- $exceptionnotes
-  , Exception(..)
-  , HttpException(..)
+  , Exception (..)
+  , HttpException (..)
   ) where
 
-import Network.Socket (Socket)
-import Http.Types (Request,Bodied,Response)
-import SocketExchange (Exception(..),HttpException(..))
-import Control.Concurrent.STM (TVar,registerDelay)
+import Control.Concurrent.STM (TVar, registerDelay)
 import Data.Bifunctor (first)
+import Http.Types (Bodied, Request, Response)
+import Network.Socket (Socket)
+import SocketExchange (Exception (..), HttpException (..))
 
-import qualified SocketInterruptibleChannel as YChan
-import qualified SocketInterruptibleExchange as Y
-import qualified SocketExchange as X
+import SocketExchange qualified as X
+import SocketInterruptibleChannel qualified as YChan
+import SocketInterruptibleExchange qualified as Y
 
--- | Issue an HTTP request and await a response. This is does not use TLS
--- (i.e. HTTP, not HTTPS). This function returns exceptions in @Left@ rather
--- than throwing them, so it is not necessary to use @catch@ when calling it.
+{- | Issue an HTTP request and await a response. This is does not use TLS
+(i.e. HTTP, not HTTPS). This function returns exceptions in @Left@ rather
+than throwing them, so it is not necessary to use @catch@ when calling it.
+-}
 exchange ::
-     Socket -- ^ Network socket (TCP or Unix-Domain)
-  -> Bodied Request -- ^ HTTP Request
-  -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
+  -- | Network socket (TCP or Unix-Domain)
+  Socket ->
+  -- | HTTP Request
+  Bodied Request ->
+  -- | HTTP Response or exception
+  IO (Either Exception (Bodied Response))
 exchange = X.exchange
 
--- | Variant of exchange that abandons the attempt if the interrupt
--- variable is set to @True@. If the operation is interrupted in this
--- way, the result is @EAGAIN@ wrapped by either @Send@ or @Receive@.
--- See the implementation of 'exchangeTimeout' for an example of how to
--- use this function to timeout if the HTTP exchange does not complete
--- quickly.
-exchangeInterruptible :: 
-     TVar Bool -- ^ Interrupt
-  -> Socket -- ^ Network socket (TCP or Unix-Domain)
-  -> Bodied Request -- ^ HTTP Request
-  -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
+{- | Variant of exchange that abandons the attempt if the interrupt
+variable is set to @True@. If the operation is interrupted in this
+way, the result is @EAGAIN@ wrapped by either @Send@ or @Receive@.
+See the implementation of 'exchangeTimeout' for an example of how to
+use this function to timeout if the HTTP exchange does not complete
+quickly.
+-}
+exchangeInterruptible ::
+  -- | Interrupt
+  TVar Bool ->
+  -- | Network socket (TCP or Unix-Domain)
+  Socket ->
+  -- | HTTP Request
+  Bodied Request ->
+  -- | HTTP Response or exception
+  IO (Either Exception (Bodied Response))
 exchangeInterruptible !a b c =
-  (fmap (first convertException) (Y.exchange (YChan.Resource b a) c))
+  fmap (first convertException) (Y.exchange (YChan.Resource b a) c)
 
--- | Variant of 'exchange' that abandons the exchange if it has not
--- completed in a given number of microseconds.
-exchangeTimeout :: 
-     Int -- ^ Microseconds to wait before giving up
-  -> Socket -- ^ Network socket (TCP or Unix-Domain)
-  -> Bodied Request -- ^ HTTP Request
-  -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
+{- | Variant of 'exchange' that abandons the exchange if it has not
+completed in a given number of microseconds.
+-}
+exchangeTimeout ::
+  -- | Microseconds to wait before giving up
+  Int ->
+  -- | Network socket (TCP or Unix-Domain)
+  Socket ->
+  -- | HTTP Request
+  Bodied Request ->
+  -- | HTTP Response or exception
+  IO (Either Exception (Bodied Response))
 exchangeTimeout !t sock req = do
   interrupt <- registerDelay t
   exchangeInterruptible interrupt sock req
@@ -136,7 +151,6 @@ Running this results in this being printed:
 >         }
 >   , body = ...
 >   }
-
 -}
 
 {- $exceptionnotes

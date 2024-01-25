@@ -11,12 +11,12 @@ module SocketChannel
 
 import Data.Bytes (Bytes)
 import Data.Bytes.Chunks (Chunks)
-import Network.Socket (Socket)
 import Foreign.C.Error (Errno)
+import Network.Socket (Socket)
 
-import qualified Foreign.C.Error.Describe as Describe
-import qualified Network.Unexceptional.Bytes as NB
-import qualified Network.Unexceptional.Chunks as NC
+import Foreign.C.Error.Describe qualified as Describe
+import Network.Unexceptional.Bytes qualified as NB
+import Network.Unexceptional.Chunks qualified as NC
 
 type M = IO
 
@@ -34,12 +34,12 @@ showsPrecErrno :: Int -> Errno -> String -> String
 showsPrecErrno _ e s = Describe.string e ++ (' ' : s)
 
 send ::
-     Resource
-  -> Chunks
-  -> M (Either Errno ())
-send a b = NC.send a b
+  Resource ->
+  Chunks ->
+  M (Either Errno ())
+send = NC.send
 
 receive ::
-     Resource
-  -> M (Either Errno Bytes)
+  Resource ->
+  M (Either Errno Bytes)
 receive a = NB.receive a 12000

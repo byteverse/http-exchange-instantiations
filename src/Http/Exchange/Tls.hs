@@ -1,106 +1,119 @@
-{-# language LambdaCase #-}
+{-# LANGUAGE LambdaCase #-}
 
--- | Issue HTTPS requests using the 'Context' type from the @tls@
--- library.
+{- | Issue HTTPS requests using the 'Context' type from the @tls@
+library.
+-}
 module Http.Exchange.Tls
   ( -- * Issue Requests
     exchange
-    -- * Issue Interruptible Requests 
+
+    -- * Issue Interruptible Requests
   , exchangeInterruptible
   , exchangeTimeout
   , interruptibleContextNew
   , interruptibleHandshake
   , exposeInterruptibleContext
+
     -- * Types
   , InterruptibleContext
-  , SocketThrowingNetworkException(..)
-  , NetworkException(..)
-  , TransportException(..)
+  , SocketThrowingNetworkException (..)
+  , NetworkException (..)
+  , TransportException (..)
+
     -- * Example Use
     -- $example
-    -- * Exceptions
     -- $exceptionnotes
-  , Exception(..)
-  , HttpException(..)
+  , Exception (..)
+  , HttpException (..)
   ) where
 
+import Http.Types (Bodied, Request, Response)
 import Network.TLS (Context)
-import Http.Types (Request,Bodied,Response)
 
-import TlsChannel (NetworkException(..),tryTls)
-import TlsChannel (TransportException(..))
-import Control.Exception (IOException,try,throwIO)
-import TlsExchange (Exception(..),HttpException(..))
+import Control.Concurrent.STM (TVar, registerDelay)
+import Control.Exception (throwIO)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Network.Socket (Socket)
-import Foreign.C.Error (Errno)
-import Foreign.C.Error (Errno)
-import Data.IORef (IORef,readIORef,writeIORef,newIORef)
-import Control.Concurrent.STM (TVar,registerDelay)
-import Data.ByteString (ByteString)
-import qualified TlsExchange as X
-import qualified Data.List as List
-import qualified Data.ByteString as ByteString
-import qualified Network.Socket as N
-import qualified Network.Unexceptional.ByteString as NBS
-import qualified Network.TLS as Tls
-import qualified Network.Unexceptional.Chunks as NC
+import Network.Socket qualified as N
+import Network.TLS qualified as Tls
+import Network.Unexceptional.ByteString qualified as NBS
+import TlsChannel (NetworkException (..), TransportException (..), tryTls)
+import TlsExchange (Exception (..), HttpException (..))
+import TlsExchange qualified as X
 
--- | Issue an HTTP request and await a response. This is does not use TLS
--- (i.e. HTTP, not HTTPS). This function returns exceptions in @Left@ rather
--- than throwing them, so it is not necessary to use @catch@ when calling it.
+{- | Issue an HTTP request and await a response. This is does not use TLS
+(i.e. HTTP, not HTTPS). This function returns exceptions in @Left@ rather
+than throwing them, so it is not necessary to use @catch@ when calling it.
+-}
 exchange ::
-     Context -- ^ TLS Context
-  -> Bodied Request -- ^ HTTP Request
-  -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
+  -- | TLS Context
+  Context ->
+  -- | HTTP Request
+  Bodied Request ->
+  -- | HTTP Response or exception
+  IO (Either Exception (Bodied Response))
 exchange = X.exchange
 
--- | Variant of exchange that abandons the attempt if the interrupt
--- variable is set to @True@. The design of the @tls@ library complicates
--- this function's signature and use. There is an 'InterruptibleContext'
--- type defined in this module that must be used with this function.
--- It is not possible to use the ordinary @Context@ type from @tls@.
--- Example use:
---
--- > clientParams   <- ... -- elided for brevity
--- > theAddressInfo <- ... -- elided for brevity
--- > sock <- ...           -- elided for brevity
--- > N.connect sock theAddressInfo
--- > ctx <- interruptibleContextNew sock clientParams
--- > Tls.handshake ctx
--- > interrupt <- registerDelay 1_000_000
--- > result <- exchange interrupt ctx Bodied{..} -- request body elided
+{- | Variant of exchange that abandons the attempt if the interrupt
+variable is set to @True@. The design of the @tls@ library complicates
+this function's signature and use. There is an 'InterruptibleContext'
+type defined in this module that must be used with this function.
+It is not possible to use the ordinary @Context@ type from @tls@.
+Example use:
+
+> clientParams   <- ... -- elided for brevity
+> theAddressInfo <- ... -- elided for brevity
+> sock <- ...           -- elided for brevity
+> N.connect sock theAddressInfo
+> ctx <- interruptibleContextNew sock clientParams
+> Tls.handshake ctx
+> interrupt <- registerDelay 1_000_000
+> result <- exchange interrupt ctx Bodied{..} -- request body elided
+-}
 exchangeInterruptible ::
-     TVar Bool -- ^ Interrupt
-  -> InterruptibleContext -- ^ TLS Context supporting interruption
-  -> Bodied Request -- ^ HTTP Request
-  -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
+  -- | Interrupt
+  TVar Bool ->
+  -- | TLS Context supporting interruption
+  InterruptibleContext ->
+  -- | HTTP Request
+  Bodied Request ->
+  -- | HTTP Response or exception
+  IO (Either Exception (Bodied Response))
 exchangeInterruptible !intr (InterruptibleContext ctx intrRef) !req = do
   writeIORef intrRef intr
   r <- X.exchange ctx req
   writeIORef intrRef interruptibleContextError
   pure r
 
--- | TLS handshake that can be interrupted. Unlike the original handshake
--- from the @tls@ library, this returns exceptions rather than throwing them.
--- This function must be called before performing any HTTP exchanges on
--- the interruptible context.
+{- | TLS handshake that can be interrupted. Unlike the original handshake
+from the @tls@ library, this returns exceptions rather than throwing them.
+This function must be called before performing any HTTP exchanges on
+the interruptible context.
+-}
 interruptibleHandshake ::
-     TVar Bool -- ^ Interrupt
-  -> InterruptibleContext -- ^ TLS Context supporting interruption
-  -> IO (Either TransportException ())
+  -- | Interrupt
+  TVar Bool ->
+  -- | TLS Context supporting interruption
+  InterruptibleContext ->
+  IO (Either TransportException ())
 interruptibleHandshake !intr (InterruptibleContext ctx intrRef) = do
   writeIORef intrRef intr
   x <- tryTls (Tls.handshake ctx)
   writeIORef intrRef interruptibleContextError
   pure x
 
--- | Variant of 'exchange' that abandons the exchange if it has not
--- completed in a given number of microseconds.
-exchangeTimeout :: 
-     Int -- ^ Microseconds to wait before giving up
-  -> InterruptibleContext -- ^ TLS Context supporting interruption
-  -> Bodied Request -- ^ HTTP Request
-  -> IO (Either Exception (Bodied Response)) -- ^ HTTP Response or exception
+{- | Variant of 'exchange' that abandons the exchange if it has not
+completed in a given number of microseconds.
+-}
+exchangeTimeout ::
+  -- | Microseconds to wait before giving up
+  Int ->
+  -- | TLS Context supporting interruption
+  InterruptibleContext ->
+  -- | HTTP Request
+  Bodied Request ->
+  -- | HTTP Response or exception
+  IO (Either Exception (Bodied Response))
 exchangeTimeout !t ctx req = do
   interrupt <- registerDelay t
   exchangeInterruptible interrupt ctx req
@@ -195,8 +208,6 @@ Running this results in this being printed:
 >         }
 >   , body = ...
 >   }
-
-
 -}
 
 {- $exceptionnotes
@@ -207,10 +218,11 @@ module, but in this instantiation, these types are both aliases
 for 'Foreign.C.Error.Errno'.
 -}
 
--- | Wraps the Socket type. This has different HasBackend instance that
--- throws NetworkException instead of IOException.
--- Elsewhere, when we call Tls.contextNew to create a TLS context,
--- we must use this type instead of Socket.
+{- | Wraps the Socket type. This has different HasBackend instance that
+throws NetworkException instead of IOException.
+Elsewhere, when we call Tls.contextNew to create a TLS context,
+we must use this type instead of Socket.
+-}
 newtype SocketThrowingNetworkException
   = SocketThrowingNetworkException Socket
 
@@ -218,62 +230,71 @@ data InterruptibleContext
   = InterruptibleContext !Tls.Context !(IORef (TVar Bool))
 
 interruptibleContextError :: TVar Bool
-{-# noinline interruptibleContextError #-}
+{-# NOINLINE interruptibleContextError #-}
 interruptibleContextError =
   errorWithoutStackTrace "Http.Exchange.Tls: misuse of InterruptibleContext"
 
--- | Create a new TLS context that supports interrupting exchanges
--- with a 'TVar'.
-interruptibleContextNew :: (Tls.TLSParams params)
-  => Socket -- ^ Network socket. Must already be connected.
-  -> params -- ^ Parameters of the context.
-  -> IO InterruptibleContext
+{- | Create a new TLS context that supports interrupting exchanges
+with a 'TVar'.
+-}
+interruptibleContextNew ::
+  (Tls.TLSParams params) =>
+  -- | Network socket. Must already be connected.
+  Socket ->
+  -- | Parameters of the context.
+  params ->
+  IO InterruptibleContext
 interruptibleContextNew socket params = do
   !intrRef <- newIORef interruptibleContextError
   let backend = buildInterruptibleBackend socket intrRef
   context <- Tls.contextNew backend params
   pure (InterruptibleContext context intrRef)
 
--- | Expose the TLS context. Do not call TLS data-exchange functions like
--- @sendData@, @recvData@, or @handshake@ on this context. This context is
--- exposed so that the caller can query it for metadata about the session
--- (certs, etc.).
+{- | Expose the TLS context. Do not call TLS data-exchange functions like
+@sendData@, @recvData@, or @handshake@ on this context. This context is
+exposed so that the caller can query it for metadata about the session
+(certs, etc.).
+-}
 exposeInterruptibleContext :: InterruptibleContext -> Tls.Context
-{-# inline exposeInterruptibleContext #-}
+{-# INLINE exposeInterruptibleContext #-}
 exposeInterruptibleContext (InterruptibleContext c _) = c
 
 buildInterruptibleBackend :: Socket -> IORef (TVar Bool) -> Tls.Backend
-buildInterruptibleBackend s !intrRef = Tls.Backend
-  { Tls.backendFlush = pure ()
-  , Tls.backendClose = N.close s
-  , Tls.backendSend = \b -> do
-      !interrupt <- readIORef intrRef
-      NBS.sendInterruptible interrupt s b >>= \case
-        Left e -> throwIO (NetworkException e)
-        Right () -> pure ()
-  , Tls.backendRecv = \n -> do
-      !interrupt <- readIORef intrRef
-      NBS.receiveExactlyInterruptible interrupt s n >>= \case
-        Left e -> throwIO (NetworkException e)
-        Right bs -> pure bs
-  }
+buildInterruptibleBackend s !intrRef =
+  Tls.Backend
+    { Tls.backendFlush = pure ()
+    , Tls.backendClose = N.close s
+    , Tls.backendSend = \b -> do
+        !interrupt <- readIORef intrRef
+        NBS.sendInterruptible interrupt s b >>= \case
+          Left e -> throwIO (NetworkException e)
+          Right () -> pure ()
+    , Tls.backendRecv = \n -> do
+        !interrupt <- readIORef intrRef
+        NBS.receiveExactlyInterruptible interrupt s n >>= \case
+          Left e -> throwIO (NetworkException e)
+          Right bs -> pure bs
+    }
 instance Tls.HasBackend SocketThrowingNetworkException where
   initializeBackend _ = pure ()
   getBackend (SocketThrowingNetworkException s) =
     buildBackendThrowingNetworkException s
 
 buildBackendThrowingNetworkException :: Socket -> Tls.Backend
-buildBackendThrowingNetworkException !s = Tls.Backend
-  { Tls.backendFlush = pure ()
-  , Tls.backendClose = N.close s
-  , Tls.backendSend = \b -> NBS.send s b >>= \case
-      Left e -> throwIO (NetworkException e)
-      Right () -> pure ()
-  -- Note: This receive function does not imitate the behavior of the
-  -- auxiliary function recvAll defined in Network.TLS.Backend. If the
-  -- peer performs an orderly shutdown without sending enough bytes,
-  -- this throws EEOI.
-  , Tls.backendRecv = \n -> NBS.receiveExactly s n >>= \case
-      Left e -> throwIO (NetworkException e)
-      Right bs -> pure bs
-  }
+buildBackendThrowingNetworkException !s =
+  Tls.Backend
+    { Tls.backendFlush = pure ()
+    , Tls.backendClose = N.close s
+    , Tls.backendSend = \b ->
+        NBS.send s b >>= \case
+          Left e -> throwIO (NetworkException e)
+          Right () -> pure ()
+    , -- Note: This receive function does not imitate the behavior of the
+      -- auxiliary function recvAll defined in Network.TLS.Backend. If the
+      -- peer performs an orderly shutdown without sending enough bytes,
+      -- this throws EEOI.
+      Tls.backendRecv = \n ->
+        NBS.receiveExactly s n >>= \case
+          Left e -> throwIO (NetworkException e)
+          Right bs -> pure bs
+    }
