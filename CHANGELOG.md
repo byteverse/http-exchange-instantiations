@@ -1,5 +1,9 @@
 # Revision history for http-exchange-instantiations
 
+## 0.1.3.1 -- 2024-02-14
+
+* Update package metadata.
+
 ## 0.1.3.0 -- 2023-09-21
 
 * Add missing `interruptibleHandshake`.
